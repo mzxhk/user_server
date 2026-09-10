@@ -8,8 +8,9 @@ import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const rootDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const settingsText = await fs.readFile(path.join(rootDirectory, 'mysql.txt'), 'utf8');
+const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
+const rootDirectory = path.resolve(serverDirectory, '..');
+const settingsText = await fs.readFile(path.join(serverDirectory, 'mysql.txt'), 'utf8');
 const settings = Object.fromEntries(
   settingsText.split(/\r?\n/).filter(Boolean).map((line) => {
     const match = line.match(/^\s*(?:MySql\s+)?(username|password|hostname|port|Database name|Table name)\s+(.+)$/i);
