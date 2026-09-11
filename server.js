@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomInt, randomUUID, X509Certificate } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { X509Certificate } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import mysql from 'mysql2/promise';
@@ -9,7 +9,6 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
-const rootDirectory = path.resolve(serverDirectory, '..');
 const settingsText = await fs.readFile(path.join(serverDirectory, 'mysql.txt'), 'utf8');
 const settings = Object.fromEntries(
   settingsText.split(/\r?\n/).filter(Boolean).map((line) => {
@@ -25,7 +24,7 @@ if (!tableName || !/^[a-zA-Z0-9_]+$/.test(tableName)) {
 
 const rejectUnauthorized = process.env.MYSQL_SSL_REJECT_UNAUTHORIZED !== 'false';
 const jwtSecret = process.env.JWT_SECRET ?? 'local-development-only-change-this-secret';
-const caCertificate = await fs.readFile(path.join(rootDirectory, 'ca.pem'), 'utf8');
+const caCertificate = await fs.readFile(path.join(serverDirectory, 'ca.pem'), 'utf8');
 new X509Certificate(caCertificate);
 
 const pool = mysql.createPool({
@@ -52,6 +51,29 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10kb' }));
 
+const captchaChallenges = new Map();
+const captchaLifetimeMs = 5 * 60 * 1000;
+
+app.get('/api/captcha', (_request, response) => {
+  const firstNumber = randomInt(2, 10);
+  const secondNumber = randomInt(2, 10);
+  const id = randomUUID();
+  captchaChallenges.set(id, {
+    answer: String(firstNumber + secondNumber),
+    expiresAt: Date.now() + captchaLifetimeMs,
+  });
+  return response.json({ id, question: `What is ${firstNumber} + ${secondNumber}?` });
+});
+
+function isCaptchaValid(body) {
+  const { captchaId, captchaAnswer } = body ?? {};
+  if (typeof captchaId !== 'string' || typeof captchaAnswer !== 'string') return false;
+
+  const challenge = captchaChallenges.get(captchaId);
+  captchaChallenges.delete(captchaId);
+  return challenge !== undefined && challenge.expiresAt > Date.now() && captchaAnswer.trim() === challenge.answer;
+}
+
 app.get('/api/health', (_request, response) => response.json({ ok: true }));
 
 function authenticate(request, response, next) {
@@ -69,6 +91,9 @@ function authenticate(request, response, next) {
 
 app.post('/api/register', async (request, response) => {
   const { name, email, password } = request.body ?? {};
+  if (!isCaptchaValid(request.body)) {
+    return response.status(400).json({ message: 'Please complete the CAPTCHA correctly.' });
+  }
   if (typeof name !== 'string' || name.trim().length < 2 || typeof email !== 'string' || typeof password !== 'string' || password.length < 8) {
     return response.status(400).json({ message: 'Name, valid email, and an 8-character password are required.' });
   }
@@ -92,6 +117,9 @@ app.post('/api/register', async (request, response) => {
 
 app.post('/api/login', async (request, response) => {
   const { email, password } = request.body ?? {};
+  if (!isCaptchaValid(request.body)) {
+    return response.status(400).json({ message: 'Please complete the CAPTCHA correctly.' });
+  }
   if (typeof email !== 'string' || typeof password !== 'string') {
     return response.status(400).json({ message: 'Email and password are required.' });
   }
